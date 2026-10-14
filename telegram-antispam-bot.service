@@ -1,0 +1,21 @@
+[Unit]
+Description=Telegram Anti-Spam Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=antispam
+WorkingDirectory=/opt/telegram-anti-spam-bot
+EnvironmentFile=/opt/telegram-anti-spam-bot/.env
+ExecStart=/opt/telegram-anti-spam-bot/.venv/bin/python /opt/telegram-anti-spam-bot/bot.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/telegram-anti-spam-bot
+
+[Install]
+WantedBy=multi-user.target
