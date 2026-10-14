@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 from database import (
     init_db, get_settings, add_violation, increment_warning,
     get_warning_count, clear_warnings, block_user, unblock_user,
-    is_blocked_user, list_blocked_users
+    is_blocked_user, list_blocked_users, track_message,
+    get_tracked_message_ids, forget_tracked_message, clear_tracked_messages
 )
 
 load_dotenv()
@@ -85,6 +86,7 @@ async def log_and_warn(message: Message, reason: str, text: str, bot: Bot):
         return
     try:
         await message.delete()
+        forget_tracked_message(message.chat.id, message.message_id)
     except Exception:
         logging.warning("Tidak bisa menghapus pesan; cek izin Delete messages.")
 
@@ -243,10 +245,31 @@ async def cmd_blockuser(message: Message, bot: Bot):
     if await is_admin(bot, message.chat.id, target.id):
         await message.reply("Saya tidak akan memasukkan admin grup ke daftar hapus otomatis.")
         return
-    block_user(message.chat.id, target.id, target.username, target.full_name)
+    chat_id = message.chat.id
+    block_user(chat_id, target.id, target.username, target.full_name)
+
+    # Delete messages from this user that the bot has tracked since deployment.
+    # Telegram does not let bots fetch arbitrary chat history.
+    ids = set(get_tracked_message_ids(chat_id, target.id, limit=100))
+    ids.add(replied.message_id)
+
+    deleted = 0
+    failed = 0
+    for message_id in ids:
+        try:
+            await bot.delete_message(chat_id, message_id)
+            deleted += 1
+        except Exception:
+            failed += 1
+        finally:
+            forget_tracked_message(chat_id, message_id)
+
     await message.answer(
-        f"🧹 Pesan baru dari {target.full_name} akan dihapus otomatis di grup ini.\n"
-        "Gunakan /unblockuser dengan membalas pesannya untuk membatalkan."
+        f"🧹 Penghapusan otomatis diaktifkan untuk {target.full_name}.\\n"
+        f"Pesan lama yang terjangkau: {deleted} dihapus"
+        + (f", {failed} tidak bisa dihapus." if failed else ".")
+        + "\\nPesan barunya akan dihapus otomatis. "
+        "Pesan sebelum bot mulai mencatatnya tidak dapat dicari otomatis oleh Telegram."
     )
 
 @dp.message(Command("unblockuser"))
@@ -287,10 +310,15 @@ async def moderate_group_messages(message: Message, bot: Bot):
     if await is_admin(bot, message.chat.id, user.id):
         return
 
+    # Track recent messages so /blockuser can remove messages already seen by the bot.
+    # This starts collecting IDs only after this version is deployed.
+    track_message(message.chat.id, user.id, message.message_id)
+
     # Persistent per-group blacklist: delete every new message from listed members.
     if is_blocked_user(message.chat.id, user.id):
         try:
             await message.delete()
+            forget_tracked_message(message.chat.id, message.message_id)
             logging.info("Pesan otomatis dihapus dari blocked user_id=%s chat_id=%s", user.id, message.chat.id)
         except Exception:
             logging.exception("Gagal menghapus pesan dari pengguna yang diblokir; cek izin Delete messages.")
